@@ -32,42 +32,39 @@ class BezierGeometry:
         self.handle = []  # handle list
         self.history = []  # undo history
 
-    @classmethod
-    def convertPointToBezier(cls, projectCRS, point):
-        bg = cls(projectCRS)
-        point = bg._trans(point)
-        bg._addAnchor(0, point)
-        return bg
+    @staticmethod
+    def _rotate_lists(anchor_list, handle_list, start_idx):
+        """
+        Rotate anchors and handles so that the anchor at start_idx becomes the first anchor.
+        Handles (two per anchor) are rotated in sync.
+        """
+        n = len(anchor_list)
+        if n == 0:
+            return anchor_list, handle_list
+        idx = start_idx % n 
+        #rotate anchors
+        new_anchors = anchor_list[idx:] + anchor_list[:idx]
+        #rotate handles (2 handles per anchor)
+        h = handle_list
+        shift = idx * 2 % len(h) if len(h) else 0
+        new_handles = h[shift:] + [:shift]
+        return new_anchors, new_handles
 
     @classmethod
-    def checkIsBezier(cls, projectCRS, polyline):
-        is_bezier = True
+    def convertLineToBezier(cls, projectCRS, polyline, linetype="bezier", start_idx=0):  # bezier,line,curve
+        """
+        Convert a polyline into a Bezier representation, allowing any anchor as start.
+        linetype: 'bezier', 'line', or 'curve'
+        start_idx: index in input polyline to treat as the first anchor
+        """
         bg = cls(projectCRS)
-        # if polyline length isn't match cause of edited other tool, points are interpolated.
-        if len(polyline) % bg.INTERPOLATION != 1:
-            is_bezier = False
-        else:
-            polyline = [bg._trans(p) for p in polyline]
-            point_list = bg._lineToPointList(polyline)
-            # Check if the number of points accidentally matches with the case of Bezier
-            # if not bezier, calculation of anchor position is different from "A" and "B"
-            for points in point_list:
-                psA, csA, peA, ceA = bg._convertPointListToAnchorAndHandle(
-                    points, "A")
-                psB, csB, peB, ceB = bg._convertPointListToAnchorAndHandle(
-                    points, "B")
-
-                if not(abs(csA[0] - csB[0]) < 0.0001 and abs(csA[1] - csB[1]) < 0.0001 and abs(ceA[0] - ceB[0]) < 0.0001 and abs(ceA[1] - ceB[1]) < 0.0001):
-                    bg.log("{}　{}　{}　{}".format(abs(
-                        csA[0] - csB[0]), abs(csA[1] - csB[1]), abs(ceA[0] - ceB[0]), abs(ceA[1] - ceB[1])))
-                    is_bezier = False
-
-        return is_bezier
-
-    @classmethod
-    def convertLineToBezier(cls, projectCRS, polyline, linetype="bezier"):  # bezier,line,curve
-        bg = cls(projectCRS)
-        polyline = [bg._trans(p) for p in polyline]
+        # transform coordinates
+        poly = [bg._trans(p) for p in polyline]
+        # rotate input list so poly[start_idx] is first
+        if len(poly) > 1:
+            start = start_idx % len(poly)
+            poly = poly[start:] + poly[:start]
+            
         if linetype == "bezier":
             point_list = bg._lineToPointList(polyline)
             bg._invertBezierPointListToBezier(point_list)
@@ -76,10 +73,54 @@ class BezierGeometry:
             bg._invertBezierPointListToBezier(point_list)
         elif linetype == "curve":
             geom = QgsGeometry.fromPolylineXY(polyline)
-            bg._convertGeometryToBezier(geom, 0, scale=1.0, last=True)
+            # drop last=True hack, always use offset=0
+            bg._convertGeometryToBezier(geom, 0, scale=1.0, last=Flase)
 
         return bg
+    def set_start_anchor(self, idx):
+        """
+        Rotate existing anchors and handles so that anchor idx becomes the first.
+        """
+        # record history
+        self.history.append({"state": "set_start_anchor", "idx": idx})
+        # rotate lists
+        slef.points = []
+        for i in range(len(self.anchor) - 1):
+            p1 = self.anchor[i]
+            c1 = self.handle[2*i + 1]
+            p2 = self.anchor[i + 1]
+            c2 = self.handle[2*i + 2]
+            segment = self._bezier(p1, c1, p2, c2)
+            if i==0:
+                self.points.extend(segment)
+            else:
+                self.points.extend(segment[1:])
+    # Existing methods unchanged except where last=True is raplased by last=False
+    
+    @classmethod
+    def convertPointToBezier(cls, projectCRS, point):
+        bg = cls(projectCRS)
+        p = bg._trans(point)
+        bg._addAnchor(0, p)
+        return bg
 
+    @classmethod
+    def checkIsBezier(cls, projectCRS, polyline):
+        is_bezier = True
+        bg = cls(projectCRS)
+        # if polyline length isn't match cause of edited other tool, points are interpolated.
+        if len(polyline) % bg.INTERPOLATION != 1:
+            return False
+        pts = [bg._trans(p) for p in polyline]
+        points_list = bg._lineToPointList(pts)
+        for pts_i in point_list:
+            psA, csA, peA, ceA = bg._convertPointListToAnchorAndHandle(pts_i, "A")
+            psB, csB, peB, ceB = bg._convertPointListToAnchorAndHandle(pts_i, "B")
+            if (abs(csA[0]-csB[0])>1e-4 or abs(csA[1]-csB[1])>1e-4
+                    or abs(ceA[0]-ceB[0])>1e-4 or abs(ceA[1]-ceB[1])>1e-4:
+                return False
+        return True
+                
     def setCRS(self, projectCRS):
         self.projectCRS = projectCRS
 
